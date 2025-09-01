@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Rock Paper Scissors</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .move-hidden {
+      opacity: 0;
+      transform: scale(0.1);
+    }
+    
+    .game-btn {
+      font-size: 2rem;
+      padding: 1rem 2rem;
+      border: none;
+      border-radius: 12px;
+      color: white;
+      cursor: pointer;
+      font-weight: 600;
+      transition: all 0.15s ease;
+      box-shadow: 0 6px 0 var(--shadow-color);
+    }
+
+    .game-btn:active {
+      transform: translateY(4px);
+      box-shadow: 0 2px 0 var(--shadow-color);
+    }
+
+    .rock-btn {
+      background: #e11d48;
+      --shadow-color: #be123c;
+    }
+    .rock-btn:hover { background: #dc2626; }
+
+    .paper-btn {
+      background: #0ea5e9;
+      --shadow-color: #0284c7;
+    }
+    .paper-btn:hover { background: #0891b2; }
+
+    .scissors-btn {
+      background: #059669;
+      --shadow-color: #047857;
+    }
+    .scissors-btn:hover { background: #0d9488; }
+
+    .bg-win {
+      background: linear-gradient(135deg, #d1fae5, #a7f3d0);
+    }
+
+    .bg-lose {
+      background: linear-gradient(135deg, #fee2e2, #fecaca);
+    }
+
+    body {
+      transition: background 0.6s ease;
+    }
+  </style>
+</head>
+<body class="min-h-screen bg-gradient-to-br from-slate-50 to-slate-200 flex flex-col items-center justify-start p-4 pt-8">
+  
+  <div class="text-center">
+    <h1 class="text-5xl font-bold mb-2 text-slate-800">Rock Paper Scissors</h1>
+    <p class="text-lg text-slate-600 mb-8">Playing against a CFR Bot</p>
+  </div>
+
+  <div id="stats" class="text-lg font-semibold mb-8 text-slate-700 bg-white px-6 py-3 rounded-lg shadow-sm">
+    Win: 0% | Lose: 0% | Draw: 0%
+  </div>
+
+  <div id="bot-move" class="text-8xl mb-12 transition-all duration-300">❔</div>
+
+  <div class="flex gap-6 mb-10">
+    <button class="game-btn rock-btn" onclick="makeMove(0)">✊</button>
+    <button class="game-btn paper-btn" onclick="makeMove(1)">✋</button>
+    <button class="game-btn scissors-btn" onclick="makeMove(2)">✌️</button>
+  </div>
+
+  <div class="flex gap-4">
+    <button id="toggle-btn" onclick="toggleStrats()" 
+            class="px-5 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white font-medium shadow-md transition-colors">
+      Show Strat Breakdown
+    </button>
+    <button onclick="resetGame()" 
+            class="px-5 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-medium shadow-md transition-colors">
+      Reset
+    </button>
+  </div>
+
+  <div id="strats" class="hidden mt-4 p-3 bg-white rounded-xl shadow-lg max-w-md w-full backdrop-blur-sm border border-slate-200">
+    <h2 class="text-lg font-semibold mb-4 text-slate-800">Strategies</h2>
+    
+    <div class="mb-4">
+      <p class="mb-2 text-sm font-medium text-slate-700">Your Strategy</p>
+      <div id="player-chart" class="flex h-3 rounded-md overflow-hidden bg-slate-100"></div>
+    </div>
+
+    <div class="mb-4">
+      <p class="mb-2 text-sm font-medium text-slate-700">Current Regret-minimising Strategy</p>
+      <div id="current-cfr-chart" class="flex h-3 rounded-md overflow-hidden bg-slate-100"></div>
+    </div>
+
+    <div>
+      <p class="mb-2 text-sm font-medium text-slate-700">Average Regret-minimising Strategy</p>
+      <div id="cfr-chart" class="flex h-3 rounded-md overflow-hidden bg-slate-100"></div>
+    </div>
+  </div>
+
+  <script>
+    const MOVES = { ROCK: 0, PAPER: 1, SCISSORS: 2 };
+    const EMOJIS = ["✊", "✋", "✌️"];
+    
+    let cfrStrategy = [1/3, 1/3, 1/3];
+    let cumulativeStrategy = [0, 0, 0];
+    let regrets = [0, 0, 0];
+
+    let gameData = {
+      playerWins: 0,
+      cfrWins: 0,
+      ties: 0,
+      totalGames: 0,
+      playerMoves: [0, 0, 0],
+      cfrMoves: [0, 0, 0]
+    };
+
+    function loadGameData() {
+      const saved = JSON.parse(localStorage.getItem("rps_data") || "null");
+      if (saved) {
+        cfrStrategy = saved.cfrStrategy;
+        cumulativeStrategy = saved.cumulativeStrategy;
+        regrets = saved.regrets;
+        gameData = saved.gameData;
+      }
+    }
+
+    function saveGameData() {
+      localStorage.setItem("rps_data", JSON.stringify({
+        cfrStrategy,
+        cumulativeStrategy,
+        regrets,
+        gameData
+      }));
+    }
+
+    function selectcfrMove() {
+      let random = Math.random();
+      let cumulative = 0;
+      
+      for (let i = 0; i < 3; i++) {
+        cumulative += cfrStrategy[i];
+        if (random < cumulative) return i;
+      }
+      return 2; // fallback
+    }
+
+    function updateCfrStrategy(playerMove, cfrMove) {
+      // Calculate utilities for each possible cfr action
+      let utilities = [0, 0, 0];
+      utilities[(playerMove + 1) % 3] = 1;  // winning move gets +1
+      utilities[(playerMove + 2) % 3] = -1; // losing move gets -1
+      // tie gets 0
+
+      // Update regrets
+      for (let action = 0; action < 3; action++) {
+        regrets[action] += utilities[action] - utilities[cfrMove];
+      }
+
+      // Convert regrets to strategy
+      let positiveRegrets = regrets.map(r => Math.max(r, 0));
+      let regretSum = positiveRegrets.reduce((a, b) => a + b, 0);
+
+      if (regretSum > 0) {
+        for (let i = 0; i < 3; i++) {
+          cfrStrategy[i] = positiveRegrets[i] / regretSum;
+        }
+      } else {
+        cfrStrategy = [1/3, 1/3, 1/3];
+      }
+    }
+
+    function calculateAverageStrategy() {
+      let total = cumulativeStrategy.reduce((a, b) => a + b, 0);
+      return total > 0 ? cumulativeStrategy.map(s => s / total) : [1/3, 1/3, 1/3];
+    }
+
+    function changeBgColor(result) {
+      const body = document.body;
+      body.className = body.className.replace(/bg-gradient-to-br|from-slate-50|to-slate-200|bg-win|bg-lose/g, '');
+      
+      if (result === "player") {
+        body.classList.add("bg-win");
+      } else if (result === "cfr") {
+        body.classList.add("bg-lose");
+      } else {
+        body.classList.add("bg-gradient-to-br", "from-slate-50", "to-slate-200");
+      }
+    }
+
+    function determineWinner(player, cfr) {
+      if (player === cfr) return "tie";
+      return (player - cfr + 3) % 3 === 1 ? "player" : "cfr";
+    }
+
+    async function makeMove(playerMove) {
+      let cfrMove = selectcfrMove();
+      let result = determineWinner(playerMove, cfrMove);
+
+      gameData.totalGames++;
+      gameData.playerMoves[playerMove]++;
+      gameData.cfrMoves[cfrMove]++;
+
+      if (result === "player") gameData.playerWins++;
+      else if (result === "cfr") gameData.cfrWins++;
+      else gameData.ties++;
+
+      updateCfrStrategy(playerMove, cfrMove);
+      for (let i = 0; i < 3; i++) {
+        cumulativeStrategy[i] += cfrStrategy[i];
+      }
+
+      saveGameData();
+
+      changeBgColor(result);
+
+      const botMoveEl = document.getElementById("bot-move");
+      botMoveEl.classList.add("move-hidden");
+      
+      setTimeout(() => {
+        botMoveEl.textContent = EMOJIS[cfrMove];
+        botMoveEl.classList.remove("move-hidden");
+      }, 250);
+
+      updateDisplay();
+    }
+
+    function updateDisplay() {
+      if (gameData.totalGames > 0) {
+        const winRate = (100 * gameData.playerWins / gameData.totalGames).toFixed(1);
+        const loseRate = (100 * gameData.cfrWins / gameData.totalGames).toFixed(1);
+        const drawRate = (100 * gameData.ties / gameData.totalGames).toFixed(1);
+        document.getElementById("stats").textContent = `Win: ${winRate}% | Lose: ${loseRate}% | Draw: ${drawRate}%`;
+      } else {
+        document.getElementById("stats").textContent = "Win: 0% | Lose: 0% | Draw: 0%";
+      }
+      
+      if (!document.getElementById("strats").classList.contains("hidden")) {
+        updateCharts();
+      }
+    }
+
+    function updateCharts() {
+      const playerTotal = gameData.playerMoves.reduce((a, b) => a + b, 0);
+      const playerFreqs = playerTotal > 0 
+        ? gameData.playerMoves.map(m => m / playerTotal) 
+        : [1/3, 1/3, 1/3];
+      
+      const cfrFreqs = calculateAverageStrategy();
+      const colors = ["bg-rose-400", "bg-sky-400", "bg-emerald-400"];
+
+      renderChart("player-chart", playerFreqs, colors);
+      renderChart("current-cfr-chart", cfrStrategy, colors);
+      renderChart("cfr-chart", cfrFreqs, colors);
+    }
+
+    function renderChart(elementId, frequencies, colors) {
+      const chart = document.getElementById(elementId);
+      chart.innerHTML = "";
+      
+      frequencies.forEach((freq, index) => {
+        const segment = document.createElement("div");
+        segment.className = colors[index];
+        segment.style.width = (freq * 100) + "%";
+        chart.appendChild(segment);
+      });
+    }
+
+    function toggleStrats() {
+      const strats = document.getElementById("strats");
+      const button = document.getElementById("toggle-btn");
+      
+      strats.classList.toggle("hidden");
+      button.textContent = strats.classList.contains("hidden") 
+        ? "Show Strat Breakdown" 
+        : "Hide Strat Breakdown";
+      
+      if (!strats.classList.contains("hidden")) {
+        updateCharts();
+      }
+    }
+
+    function resetGame() {
+      cfrStrategy = [1/3, 1/3, 1/3];
+      cumulativeStrategy = [0, 0, 0];
+      regrets = [0, 0, 0];
+      gameData = {
+        playerWins: 0,
+        cfrWins: 0,
+        ties: 0,
+        totalGames: 0,
+        playerMoves: [0, 0, 0],
+        cfrMoves: [0, 0, 0]
+      };
+      
+      localStorage.removeItem("rps_data");
+      document.getElementById("bot-move").textContent = "❔";
+      
+      const body = document.body;
+      body.className = "min-h-screen bg-gradient-to-br from-slate-50 to-slate-200 flex flex-col items-center justify-start p-4 pt-8";
+      
+      updateDisplay();
+    }
+
+    loadGameData();
+    updateDisplay();
+  </script>
+</body>
+</html>
